@@ -1,14 +1,90 @@
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/epoll.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
-#include "fuse_proto.h"
 #include "decoder_api.h"
 
-void intercept_fuse_loop(int fuse_fd) {
-	char buffer[8192];
-	int bytes = (int)read(fuse_fd, buffer, sizeof(buffer));
+#define MAX_EVENTS 10
 
-	if (bytes > 0) {
-		decode_fuse_message(buffer, bytes);
+static const char *MOUNT_DIR = "./my_mnt_dir";
+
+int mount_fuse(const char *mountpoint);
+
+static void handle_sigint(int sig) {
+	(void)sig;
+	printf("\nCaught SIGINT. Unmounting %s...\n", MOUNT_DIR);
+
+	char cmd[256];
+	snprintf(cmd, sizeof(cmd), "fusermount3 -u %s", MOUNT_DIR);
+	system(cmd);
+	exit(0);
+}
+
+int main(void) {
+	signal(SIGINT, handle_sigint);
+
+
+    system("fusermount3 -u ./my_mnt_dir 2>/dev/null");
+
+    
+	mkdir(MOUNT_DIR, 0777);
+
+	printf("Mounting FUSE on %s...\n", MOUNT_DIR);
+	int fuse_fd = mount_fuse(MOUNT_DIR);
+	if (fuse_fd < 0) {
+		printf("Failed to mount FUSE. Exiting.\n");
+		return 1;
 	}
+
+	int flags = fcntl(fuse_fd, F_GETFL, 0);
+	if (flags >= 0) {
+		fcntl(fuse_fd, F_SETFL, flags | O_NONBLOCK);
+	}
+
+	int epoll_fd = epoll_create1(0);
+	if (epoll_fd < 0) {
+		perror("epoll_create1 failed");
+		return 1;
+	}
+
+	struct epoll_event ev;
+	struct epoll_event events[MAX_EVENTS];
+	ev.events = EPOLLIN;
+	ev.data.fd = fuse_fd;
+
+	if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fuse_fd, &ev) < 0) {
+		perror("epoll_ctl failed");
+		close(epoll_fd);
+		close(fuse_fd);
+		return 1;
+	}
+
+	printf("Listening for kernel messages. Run 'ls %s' in another terminal.\n", MOUNT_DIR);
+	printf("Press Ctrl+C to exit.\n");
+
+	char buffer[8192];
+
+	while (1) {
+		int nfds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+		if (nfds < 0) {
+			perror("epoll_wait failed");
+			continue;
+		}
+
+		for (int i = 0; i < nfds; i++) {
+			if (events[i].data.fd == fuse_fd) {
+				int bytes = (int)read(fuse_fd, buffer, sizeof(buffer));
+				if (bytes > 0) {
+						decode_fuse_message(buffer, bytes, fuse_fd);
+				}
+			}
+		}
+	}
+
+	return 0;
 }
 
