@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FUSE Protocol Visualizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Courier New', monospace;
+            padding: 24px;
+        }
+        h2 {
+            color: #00ff88;
+            font-size: 18px;
+            margin-bottom: 8px;
+        }
+        #status {
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 16px;
+        }
+        #status.connected { color: #00ff88; }
+        #log {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .event {
+            background: #2a2a2a;
+            border-left: 3px solid #00ff88;
+            padding: 6px 10px;
+            font-size: 13px;
+            border-radius: 2px;
+        }
+        .event .op  { color: #569cd6; font-weight: bold; margin-right: 8px; }
+        .event .node { color: #ce9178; margin-right: 8px; }
+        .event .desc { color: #d4d4d4; }
+        .event .ts   { color: #555; font-size: 11px; float: right; }
+    </style>
+</head>
+<body>
+    <h2>Live Kernel Protocol Stream</h2>
+    <div id="status">Connecting to server...</div>
+    <div id="log"><div class="event"><span class="desc">Waiting for kernel events...</span></div></div>
+
+    <script>
+        const socket = io();
+        const logDiv = document.getElementById('log');
+        const statusDiv = document.getElementById('status');
+
+        socket.on('connect', () => {
+            statusDiv.textContent = 'Connected — run: ls my_mnt_dir';
+            statusDiv.classList.add('connected');
+        });
+
+        socket.on('disconnect', () => {
+            statusDiv.textContent = 'Disconnected from server';
+            statusDiv.classList.remove('connected');
+        });
+
+        socket.on('fuse_event', function(msg) {
+            const el = document.createElement('div');
+            el.className = 'event';
+            const ts = new Date(msg.ts / 1e6).toISOString().substr(11, 12);
+            el.innerHTML =
+                `<span class="op">OP:${msg.op}</span>` +
+                `<span class="node">Node:${msg.node}</span>` +
+                `<span class="desc">${msg.desc}</span>` +
+                `<span class="ts">${ts}</span>`;
+            logDiv.insertBefore(el, logDiv.firstChild);
+            if (logDiv.children.length > 200) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        });
+    </script>
+</body>
+</html>
