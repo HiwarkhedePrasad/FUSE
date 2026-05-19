@@ -5,8 +5,9 @@
 
 #include "fuse_structs.h"
 #include "decoder_api.h"
+#include "ring_buffer.h"
 
-void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
+void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd, struct ring_buffer *rb) {
 	if (bytes_read < (int)sizeof(struct fuse_in_header)) {
 		printf("Error: Message too short to be a valid FUSE request.\n");
 		return;
@@ -14,10 +15,10 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 
 	struct fuse_in_header *header = (struct fuse_in_header *)raw_buffer;
 
-	printf("\n=== NEW KERNEL REQUEST ===\n");
-	printf("Total Length: %u bytes\n", header->len);
-	printf("Opcode: %u\n", header->opcode);
-	printf("Target NodeID: %" PRIu64 "\n", header->nodeid);
+	char _top_desc[128];
+	snprintf(_top_desc, sizeof(_top_desc),
+		"opcode=%u nodeid=%lu len=%u", header->opcode, (unsigned long)header->nodeid, header->len);
+	ring_buffer_write(rb, header->opcode, header->nodeid, _top_desc);
 
 	char *payload = raw_buffer + sizeof(struct fuse_in_header);
 	int payload_bytes = bytes_read - (int)sizeof(struct fuse_in_header);
@@ -30,8 +31,9 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 			}
 
 			struct fuse_init_in *init_data = (struct fuse_init_in *)payload;
-			printf("[+] Operation: FUSE_INIT\n");
-			printf("    Kernel Protocol Version: %u.%u\n", init_data->major, init_data->minor);
+			char desc[128];
+			snprintf(desc, sizeof(desc), "FUSE_INIT kernel=%u.%u", init_data->major, init_data->minor);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 
 			struct fuse_init_out out_payload;
 			memset(&out_payload, 0, sizeof(out_payload));
@@ -53,9 +55,8 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 
 			if (writev(fuse_fd, iov, 2) < 0) {
 				perror("writev failed");
-			} else {
-				printf("    [->] Sent FUSE_INIT response! Kernel unlocked.\n");
 			}
+			ring_buffer_write(rb, 0, 0, "sent FUSE_INIT response, kernel unlocked");
 			break;
 		}
 
@@ -67,8 +68,11 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 			}
 
 			struct fuse_read_in *read_data = (struct fuse_read_in *)payload;
-			printf("[+] Operation: %s\n", header->opcode == FUSE_READ ? "FUSE_READ" : "FUSE_READDIR");
-			printf("    Reading %u bytes starting at offset %" PRIu64 "\n", read_data->size, read_data->offset);
+			char desc[128];
+			snprintf(desc, sizeof(desc), "%s size=%u offset=%lu",
+				header->opcode == FUSE_READ ? "FUSE_READ" : "FUSE_READDIR",
+				read_data->size, (unsigned long)read_data->offset);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 			break;
 		}
 
@@ -78,8 +82,9 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 				return;
 			}
 
-			printf("[+] Operation: FUSE_GETATTR\n");
-			printf("    Kernel is asking for attributes of NodeID: %lu\n", header->nodeid);
+			char desc[128];
+			snprintf(desc, sizeof(desc), "FUSE_GETATTR nodeid=%lu", (unsigned long)header->nodeid);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 
 			// 1. Build the payload
 			struct fuse_attr_out out_payload;
@@ -109,7 +114,7 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 			iov[1].iov_len = sizeof(out_payload);
 
 			writev(fuse_fd, iov, 2);
-			printf("    [->] Sent FUSE_GETATTR response! Told kernel it's a directory.\n");
+			ring_buffer_write(rb, 0, 0, "sent FUSE_GETATTR response, told kernel it is a directory");
 			break;
 		}
 
@@ -120,9 +125,10 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 			}
 
 			struct fuse_open_in *open_data = (struct fuse_open_in *)payload;
-			printf("[+] Operation: FUSE_OPEN\n");
-			printf("    flags: %u\n", open_data->flags);
-			printf("    open_flags: %u\n", open_data->open_flags);
+			char desc[128];
+			snprintf(desc, sizeof(desc), "FUSE_OPEN flags=%u open_flags=%u",
+				open_data->flags, open_data->open_flags);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 			break;
 		}
 
@@ -133,8 +139,10 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 			}
 
 			struct fuse_write_in *write_data = (struct fuse_write_in *)payload;
-			printf("[+] Operation: FUSE_WRITE\n");
-			printf("    Writing %u bytes starting at offset %" PRIu64 "\n", write_data->size, write_data->offset);
+			char desc[128];
+			snprintf(desc, sizeof(desc), "FUSE_WRITE size=%u offset=%lu",
+				write_data->size, (unsigned long)write_data->offset);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 			break;
 		}
 
@@ -145,19 +153,24 @@ void decode_fuse_message(char *raw_buffer, int bytes_read, int fuse_fd) {
 			}
 
 			struct fuse_release_in *release_data = (struct fuse_release_in *)payload;
-			printf("[+] Operation: FUSE_RELEASE\n");
-			printf("    fh: %" PRIu64 "\n", release_data->fh);
+			char desc[128];
+			snprintf(desc, sizeof(desc), "FUSE_RELEASE fh=%lu", (unsigned long)release_data->fh);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 			break;
 		}
 
-		case FUSE_LOOKUP:
-			printf("[+] Operation: FUSE_LOOKUP\n");
-			printf("    Looking up file name: %s\n", payload);
+		case FUSE_LOOKUP: {
+			char desc[128];
+			snprintf(desc, sizeof(desc), "FUSE_LOOKUP name=%s", payload);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 			break;
+		}
 
-		default:
-			printf("[-] Unhandled Opcode: %u\n", header->opcode);
+		default: {
+			char desc[128];
+			snprintf(desc, sizeof(desc), "unhandled opcode=%u", header->opcode);
+			ring_buffer_write(rb, header->opcode, header->nodeid, desc);
 			break;
+		}
 	}
 }
-

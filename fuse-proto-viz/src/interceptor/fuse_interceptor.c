@@ -1,12 +1,17 @@
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "decoder_api.h"
+#include "ring_buffer.h"
+
+static struct ring_buffer g_ring_buffer;
 
 #define MAX_EVENTS 10
 
@@ -24,9 +29,35 @@ static void handle_sigint(int sig) {
 	exit(0);
 }
 
+static void *consumer_thread(void *arg) {
+	(void)arg;
+	struct fuse_event event;
+	while (1) {
+		if (ring_buffer_read(&g_ring_buffer, &event)) {
+			printf("{\"ts\":%lu,\"op\":%u,\"node\":%lu,\"desc\":\"%s\"}\n",
+				(unsigned long)event.timestamp,
+				event.opcode,
+				(unsigned long)event.nodeid,
+				event.description);
+			fflush(stdout);
+		} else {
+			struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000 };
+			nanosleep(&ts, NULL);
+		}
+	}
+	return NULL;
+}
+
 int main(void) {
 	signal(SIGINT, handle_sigint);
 
+	ring_buffer_init(&g_ring_buffer);
+	pthread_t consumer;
+	if (pthread_create(&consumer, NULL, consumer_thread, NULL) != 0) {
+		perror("pthread_create failed");
+		return 1;
+	}
+	pthread_detach(consumer);
 
     system("fusermount3 -u ./my_mnt_dir 2>/dev/null");
 
@@ -79,7 +110,7 @@ int main(void) {
 			if (events[i].data.fd == fuse_fd) {
 				int bytes = (int)read(fuse_fd, buffer, sizeof(buffer));
 				if (bytes > 0) {
-						decode_fuse_message(buffer, bytes, fuse_fd);
+						decode_fuse_message(buffer, bytes, fuse_fd, &g_ring_buffer);
 				}
 			}
 		}
@@ -87,4 +118,3 @@ int main(void) {
 
 	return 0;
 }
-
