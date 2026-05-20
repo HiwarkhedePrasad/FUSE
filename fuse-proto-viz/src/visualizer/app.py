@@ -22,7 +22,12 @@ def _broadcast(msg: str):
                 ws.send(msg)
             except Exception:
                 dead.add(ws)
-        _subscribers -= dead
+        # IMPORTANT: Do NOT use "_subscribers -= dead" here!
+        # The -= operator creates a local variable assignment in Python's
+        # scope, which causes UnboundLocalError on the first read of
+        # _subscribers in the for-loop above.  Use difference_update()
+        # which modifies the set in-place without reassignment.
+        _subscribers.difference_update(dead)
 
 def _run_interceptor():
     try:
@@ -86,10 +91,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
 
-/* ── Layout ── */
+/* Layout */
 .shell{display:grid;grid-template-rows:52px 1fr;grid-template-columns:220px 1fr 280px;height:100vh;gap:0}
 
-/* ── Top bar ── */
+/* Top bar */
 .topbar{grid-column:1/-1;display:flex;align-items:center;gap:16px;padding:0 20px;
   border-bottom:1px solid var(--border);background:var(--surface)}
 .logo{font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.04em;color:var(--accent)}
@@ -104,7 +109,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .stat-chip .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
 .divider{width:1px;height:28px;background:var(--border2)}
 
-/* ── Sidebar ── */
+/* Sidebar */
 .sidebar{border-right:1px solid var(--border);background:var(--surface);padding:16px 0;overflow-y:auto}
 .sidebar-section{padding:0 16px 16px}
 .sidebar-title{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
@@ -123,7 +128,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .filter-label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);cursor:pointer}
 .filter-label input{accent-color:var(--accent)}
 
-/* ── Main event log ── */
+/* Main event log */
 .main{background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
 .log-header{display:flex;align-items:center;gap:10px;padding:12px 16px;
   border-bottom:1px solid var(--border)}
@@ -167,7 +172,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .op-FUSE_RELEASE .badge{background:#f9731620;color:#f97316;border:1px solid #f9731640}
 .op-unknown      .badge{background:#64748b20;color:#94a3b8;border:1px solid #64748b40}
 
-/* ── Right panel: sequence + detail ── */
+/* Right panel: sequence + detail */
 .panel{border-left:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;overflow:hidden}
 .panel-tabs{display:flex;border-bottom:1px solid var(--border)}
 .tab{flex:1;padding:10px 0;font-size:11px;text-align:center;cursor:pointer;
@@ -197,7 +202,7 @@ svg.seq{width:100%;font-family:var(--mono)}
   height:100%;color:var(--muted);font-size:12px;gap:8px}
 .empty-state svg{opacity:.2}
 
-/* ── Rate sparkline ── */
+/* Rate sparkline */
 #sparkline{display:block}
 
 /* pause indicator */
@@ -214,7 +219,7 @@ svg.seq{width:100%;font-family:var(--mono)}
 <header class="topbar">
   <div class="logo">fuse<span>-proto-</span>viz</div>
   <div class="status-dot" id="dot"></div>
-  <span id="status-label">connecting…</span>
+  <span id="status-label">connecting...</span>
   <div class="spacer"></div>
   <div class="stat-chip"><span class="val" id="total-count">0</span><span class="lbl">events</span></div>
   <div class="divider"></div>
@@ -240,19 +245,19 @@ svg.seq{width:100%;font-family:var(--mono)}
   <div class="log-header">
     <span class="log-header-title">event log</span>
     <div class="controls">
-      <input class="search-input" id="search" placeholder="search desc…" oninput="applySearch()"/>
-      <button class="btn" id="scroll-btn" onclick="toggleScroll()">⏸ pause</button>
+      <input class="search-input" id="search" placeholder="search desc..." oninput="applySearch()"/>
+      <button class="btn" id="scroll-btn" onclick="toggleScroll()">pause</button>
       <button class="btn danger" onclick="clearLog()">clear</button>
       <button class="btn" onclick="exportLog()">export</button>
     </div>
   </div>
-  <div class="paused-banner" id="paused-banner">● PAUSED — scroll up to review, click "resume" to continue</div>
+  <div class="paused-banner" id="paused-banner">PAUSED - scroll up to review, click "resume" to continue</div>
   <div class="log-body" id="log-body">
     <div class="empty-state" id="empty-state">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
         <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
       </svg>
-      waiting for FUSE events…
+      waiting for FUSE events...
     </div>
   </div>
 </main>
@@ -290,7 +295,7 @@ let events=[], opStats={}, filtered=[], autoScroll=true, activeFilter=new Set(),
 const MAX_EVENTS=2000, MAX_SEQ=40;
 let rateHistory=Array(30).fill(0), lastRateTick=Date.now(), tickCount=0;
 
-/* ── WebSocket ── */
+/* WebSocket */
 const proto=location.protocol==='https:'?'wss':'ws';
 const ws=new WebSocket(`${proto}://${location.host}/ws/events`);
 ws.onopen=()=>{setStatus(true)};
@@ -307,7 +312,7 @@ function setStatus(live){
   document.getElementById('status-label').textContent=live?'live':'disconnected';
 }
 
-/* ── Ingest ── */
+/* Ingest */
 function ingestEvent(ev){
   const name=OPCODE_MAP[ev.op]||'unknown';
   ev._name=name;
@@ -330,7 +335,7 @@ function ingestEvent(ev){
   document.getElementById('total-count').textContent=events.length;
 }
 
-/* ── Filter logic ── */
+/* Filter logic */
 function passesFilter(ev){
   if(activeFilter.size>0 && !activeFilter.has(ev._name)) return false;
   if(searchVal && !ev.desc.toLowerCase().includes(searchVal)) return false;
@@ -357,7 +362,7 @@ function rebuildLog(){
   if(autoScroll) body.scrollTop=body.scrollHeight;
 }
 
-/* ── Render row ── */
+/* Render row */
 function renderRow(ev,animate=true){
   const body=document.getElementById('log-body');
   const old=document.getElementById('empty-state');
@@ -380,12 +385,12 @@ function renderRow(ev,animate=true){
 
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 
-/* ── Scroll control ── */
+/* Scroll control */
 function toggleScroll(){
   autoScroll=!autoScroll;
   const btn=document.getElementById('scroll-btn');
   const banner=document.getElementById('paused-banner');
-  btn.textContent=autoScroll?'⏸ pause':'▶ resume';
+  btn.textContent=autoScroll?'pause':'resume';
   banner.classList.toggle('show',!autoScroll);
   if(autoScroll){const b=document.getElementById('log-body');b.scrollTop=b.scrollHeight}
 }
@@ -395,9 +400,8 @@ function exportLog(){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='fuse_events.ndjson';a.click();
 }
 
-/* ── Sidebar ── */
+/* Sidebar */
 function updateSidebar(){
-  const all=Object.keys(COLORS);
   const total=Object.values(opStats).reduce((a,b)=>a+b,0)||1;
   const list=document.getElementById('opcode-list');
   const fr=document.getElementById('filter-row');
@@ -421,7 +425,7 @@ function updateSidebar(){
   });
 }
 
-/* ── Detail panel ── */
+/* Detail panel */
 function showDetail(ev){
   switchTab('detail');
   const pane=document.getElementById('detail-pane');
@@ -445,15 +449,15 @@ function showDetail(ev){
     </div>`;
 }
 
-/* ── Tab switcher ── */
+/* Tab switcher */
 function switchTab(id){
   document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',['seq','detail'][i]===id)});
   document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
   document.getElementById('tab-'+id).classList.add('active');
 }
 
-/* ── Sequence diagram ── */
-const SEQ_W=260, ROW_H=24, HEADER_H=36, ACTOR_W=80;
+/* Sequence diagram */
+const SEQ_W=260, ROW_H=24, HEADER_H=36;
 const ACTORS=['Kernel','fuse_viz','VFS'];
 const ACTOR_X=[30,130,220];
 
@@ -497,7 +501,7 @@ function drawSeq(){
   if(autoScroll) wrap.scrollTop=wrap.scrollHeight;
 }
 
-/* ── Sparkline rate ── */
+/* Sparkline rate */
 setInterval(()=>{
   const now=Date.now();
   const dt=(now-lastRateTick)/1000;
@@ -548,5 +552,4 @@ if __name__ == "__main__":
     print("[*] Starting C Interceptor:", FUSE_VIZ_BIN)
     _start_interceptor_thread()
     print("[*] Starting Flask WebSocket Server...")
-    from flask_sock import Sock as _Sock
     app.run(host="0.0.0.0", port=5000, debug=False)
